@@ -3,6 +3,7 @@ import duckdb
 import os
 import json
 from utils.response import Response, ResponseStatus
+from utils.table_status import TableStatus
 #from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger("main")
@@ -14,6 +15,104 @@ out_path = os.path.abspath(out_path)
 db_path = os.path.join(out_path, "storage.db")
 index_path = os.path.join(out_path, "indexes")
 
+#SETUP
+
+def setup() -> str:
+        """
+        Setups the database system for registration purposes.
+
+        ## Returns
+        - `str`: A JSON string representing the result of the process (`Response`).
+        """
+        try:
+            with duckdb.connect(db_path) as connection:
+                connection.execute("INSTALL httpfs")
+                connection.execute("LOAD httpfs")
+                logger.info("HTTPFS installed and loaded")
+
+                connection.sql(
+                    """CREATE TABLE IF NOT EXISTS table_status (
+                        id VARCHAR PRIMARY KEY,
+                        table_name VARCHAR NOT NULL,
+                        status VARCHAR NOT NULL,
+                        time_created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        creator VARCHAR NOT NULL,
+                        hash VARCHAR NOT NULL,
+                        )
+                    """
+                )
+                logger.info("Table `table_status` created")
+
+                # Arbitrary auto-incrementing id for contexts and summaries.
+                # Change to "CREATE IF NOT EXISTS" on production.
+                connection.sql("CREATE SEQUENCE IF NOT EXISTS id_seq START 1")
+                logger.info("ID sequence created")
+
+                # DuckDB does not support "ON DELETE CASCADE" so be careful with deletions.
+                connection.sql(
+                    """CREATE TABLE IF NOT EXISTS table_contexts (
+                        id INTEGER DEFAULT nextval('id_seq') PRIMARY KEY,
+                        table_id VARCHAR NOT NULL REFERENCES table_status(id),
+                        context JSON NOT NULL
+                        )
+                    """
+                )
+                logger.info("Table `table_contexts` created")
+
+                # DuckDB does not support "ON DELETE CASCADE" so be careful with deletions.
+                connection.sql(
+                    """CREATE TABLE IF NOT EXISTS table_summaries (
+                        id INTEGER DEFAULT nextval('id_seq') PRIMARY KEY,
+                        table_id VARCHAR NOT NULL REFERENCES table_status(id),
+                        summary JSON NOT NULL,
+                        summary_type VARCHAR NOT NULL,
+                        )
+                    """
+                )
+                logger.info("Table `table_summaries` created")
+
+                connection.sql(
+                    """CREATE TABLE IF NOT EXISTS indexes (
+                        id INTEGER default nextval('id_seq') PRIMARY KEY,
+                        name VARCHAR NOT NULL,
+                        location VARCHAR NOT NULL,
+                        )
+                    """
+                )
+                logger.info("Table `indexes` created")
+
+                connection.sql(
+                    """CREATE TABLE IF NOT EXISTS index_table_mappings (
+                        index_id INTEGER NOT NULL REFERENCES indexes(id),
+                        table_id VARCHAR NOT NULL REFERENCES table_status(id),
+                        PRIMARY KEY (index_id, table_id)
+                        )
+                    """
+                )
+                logger.info("Table `index_table_mappings` created")
+
+                # TODO: Adjust the response column to the actual response type.
+                connection.sql(
+                    """CREATE TABLE IF NOT EXISTS query_history (
+                        time TIMESTAMP DEFAULT CURRENT_TIMESTAMP PRIMARY KEY,
+                        table_id VARCHAR NOT NULL REFERENCES table_status(id), 
+                        query VARCHAR NOT NULL,
+                        response VARCHAR NOT NULL,
+                        querant VARCHAR NOT NULL
+                        )
+                    """
+                )
+                logger.info("Table `query_history` created")
+
+                return Response(
+                    status=ResponseStatus.SUCCESS,
+                    message="Database Initialized.",
+                ).to_json()
+        except Exception as e:
+            return Response(
+                status=ResponseStatus.ERROR,
+                message=f"Error initializing database: {e}",
+            ).to_json()
 
 # READ TABLE DATA
 
@@ -153,7 +252,7 @@ def read_table_file(
                     f"""INSERT INTO table_status (id, table_name, status, creator, hash)
                     VALUES ('{path}', '{name}', '{TableStatus.REGISTERED}', '{creator}', '{table_hash}')"""
                 )
-                
+
                 return Response(
                     status=ResponseStatus.SUCCESS,
                     message=f"Table with ID: {path} has been added to the database.",
@@ -202,5 +301,6 @@ def add_tables(
 
 
 data_path = "data_src/sample_data/csv"
+setup()
 response = add_tables(path=data_path, creator="demo_user")
 print(response)
